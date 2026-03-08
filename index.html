@@ -1180,24 +1180,49 @@
         }
 
         // ═══ AUDIO ═══
+        let _volRampTimer = null;
+
         function _resumeCtx() {
             if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') {
                 return Howler.ctx.resume();
             }
             return Promise.resolve();
         }
+
+        // Manual volume ramp — much more reliable than Howler.fade() on mobile
+        function _rampVolume(target, durationMs) {
+            if (!ambientSound) return;
+            clearInterval(_volRampTimer);
+            const steps = 20;
+            const stepMs = durationMs / steps;
+            let current = ambientSound.volume();
+            const delta = (target - current) / steps;
+            let step = 0;
+            _volRampTimer = setInterval(() => {
+                step++;
+                if (step >= steps) {
+                    clearInterval(_volRampTimer);
+                    _volRampTimer = null;
+                    try { ambientSound.volume(target); } catch (e) { }
+                    return;
+                }
+                current += delta;
+                try { ambientSound.volume(Math.max(0, Math.min(1, current))); } catch (e) { }
+            }, stepMs);
+        }
+
         function initAudio(src) {
             ambientSound = new Howl({ src: [src], loop: true, volume: 0, html5: true });
         }
+
         function fadeMusicOut() {
             if (!ambientSound || !musicPlaying) return;
             clearTimeout(_fadeDebounce);
             _fadeDebounce = setTimeout(() => {
-                // Stop any ongoing fade first by snapping to current volume
-                try { ambientSound.volume(ambientSound.volume()); } catch (e) { }
-                ambientSound.fade(ambientSound.volume(), 0, 600);
-            }, 80);
+                _rampVolume(0, 500);
+            }, 50);
         }
+
         function fadeMusicIn() {
             if (!ambientSound || !musicPlaying) return;
             // Don't restore if video section is visible AND video is actively playing
@@ -1205,16 +1230,19 @@
             clearTimeout(_fadeDebounce);
             _fadeDebounce = setTimeout(() => {
                 _resumeCtx().then(() => {
-                    if (videoSectionVisible && videoIsPlaying) return; // re-check after async
-                    try { ambientSound.volume(ambientSound.volume()); } catch (e) { }
-                    if (!ambientSound.playing()) ambientSound.play();
-                    ambientSound.fade(ambientSound.volume(), _userVolume, 800);
+                    if (videoSectionVisible && videoIsPlaying) return;
+                    // On mobile the sound may have been suspended — ensure it's playing
+                    // .play() is safe to call even if already playing with html5 mode
+                    try { if (!ambientSound.playing()) ambientSound.play(); } catch (e) { }
+                    _rampVolume(_userVolume, 800);
                 });
-            }, 150);
+            }, 100);
         }
+
         function toggleMusic() {
             if (!ambientSound) return;
             if (musicPlaying) {
+                clearInterval(_volRampTimer);
                 ambientSound.pause();
                 musicPlaying = false;
                 document.getElementById('music-icon').textContent = '♪';
@@ -1222,16 +1250,17 @@
             } else {
                 _resumeCtx().then(() => {
                     ambientSound.play();
-                    ambientSound.fade(0, videoSectionVisible ? 0 : _userVolume, 1000);
+                    _rampVolume(videoSectionVisible ? 0 : _userVolume, 1000);
                     musicPlaying = true;
                     document.getElementById('music-icon').textContent = '♫';
                     document.getElementById('player-status').textContent = 'Playing';
                 });
             }
         }
+
         function setVolume(v) {
             _userVolume = v;
-            if (ambientSound && !videoSectionVisible) ambientSound.volume(v);
+            if (ambientSound && !(videoSectionVisible && videoIsPlaying)) ambientSound.volume(v);
         }
 
         // ═══ ENTER EXPERIENCE ═══
@@ -1239,7 +1268,7 @@
             if (withMusic && ambientSound) {
                 _resumeCtx().then(() => {
                     ambientSound.play();
-                    ambientSound.fade(0, _userVolume, 2000);
+                    _rampVolume(_userVolume, 2000);
                     musicPlaying = true;
                 });
             }
