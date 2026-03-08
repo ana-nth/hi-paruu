@@ -1082,8 +1082,9 @@
         let _userVolume = 0.6;
 
         window.onYouTubeIframeAPIReady = function () {
-            initYTPlayers();
-        };
+                initYTPlayers();
+                monitorYTPlayers();
+            };
 
         function initYTPlayers() {
             const iframes = document.querySelectorAll('.scene--video iframe');
@@ -1109,6 +1110,27 @@
                     } catch (e) { console.warn('YT Player init failed', e) }
                 }
             });
+        }
+
+        function monitorYTPlayers() {
+            setInterval(() => {
+                Object.values(ytPlayers).forEach(player => {
+                    try {
+                        const state = player.getPlayerState();
+
+                        if (state === YT.PlayerState.PLAYING) {
+                            videoIsPlaying = true;
+                            fadeMusicOut();
+                        }
+
+                        if (state === YT.PlayerState.PAUSED || state === YT.PlayerState.ENDED) {
+                            videoIsPlaying = false;
+                            fadeMusicIn();
+                        }
+
+                    } catch (e) {}
+                });
+            }, 700);
         }
 
         document.addEventListener('touchstart', () => {
