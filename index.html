@@ -1076,6 +1076,10 @@
         // ═══ GLOBALS ═══
         let ambientSound = null; let musicPlaying = false; let config = null;
         let ytPlayers = {};
+        let videoSectionVisible = false;
+        let videoIsPlaying = false;
+        let _fadeDebounce = null;
+        let _userVolume = 0.6;
 
         window.onYouTubeIframeAPIReady = function () {
             initYTPlayers();
@@ -1093,8 +1097,10 @@
                             events: {
                                 'onStateChange': (event) => {
                                     if (event.data === YT.PlayerState.PLAYING) {
+                                        videoIsPlaying = true;
                                         fadeMusicOut();
                                     } else if (event.data === YT.PlayerState.PAUSED || event.data === YT.PlayerState.ENDED) {
+                                        videoIsPlaying = false;
                                         fadeMusicIn();
                                     }
                                 }
@@ -1174,26 +1180,37 @@
         }
 
         // ═══ AUDIO ═══
+        function _resumeCtx() {
+            if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') {
+                return Howler.ctx.resume();
+            }
+            return Promise.resolve();
+        }
         function initAudio(src) {
             ambientSound = new Howl({ src: [src], loop: true, volume: 0, html5: true });
         }
         function fadeMusicOut() {
-            if (ambientSound && musicPlaying) {
-                ambientSound.fade(ambientSound.volume(), 0, 800);
-            }
+            if (!ambientSound || !musicPlaying) return;
+            clearTimeout(_fadeDebounce);
+            _fadeDebounce = setTimeout(() => {
+                // Stop any ongoing fade first by snapping to current volume
+                try { ambientSound.volume(ambientSound.volume()); } catch (e) { }
+                ambientSound.fade(ambientSound.volume(), 0, 600);
+            }, 80);
         }
         function fadeMusicIn() {
-            if (ambientSound && musicPlaying) {
-                if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') {
-                    Howler.ctx.resume().then(() => {
-                        ambientSound.fade(ambientSound.volume(), 0.6, 1000);
-                        if (!ambientSound.playing()) ambientSound.play();
-                    });
-                } else {
-                    ambientSound.fade(ambientSound.volume(), 0.6, 1000);
+            if (!ambientSound || !musicPlaying) return;
+            // Don't restore if video section is visible AND video is actively playing
+            if (videoSectionVisible && videoIsPlaying) return;
+            clearTimeout(_fadeDebounce);
+            _fadeDebounce = setTimeout(() => {
+                _resumeCtx().then(() => {
+                    if (videoSectionVisible && videoIsPlaying) return; // re-check after async
+                    try { ambientSound.volume(ambientSound.volume()); } catch (e) { }
                     if (!ambientSound.playing()) ambientSound.play();
-                }
-            }
+                    ambientSound.fade(ambientSound.volume(), _userVolume, 800);
+                });
+            }, 150);
         }
         function toggleMusic() {
             if (!ambientSound) return;
@@ -1203,19 +1220,29 @@
                 document.getElementById('music-icon').textContent = '♪';
                 document.getElementById('player-status').textContent = 'Paused';
             } else {
-                if (Howler.ctx && Howler.ctx.state === 'suspended') Howler.ctx.resume();
-                ambientSound.play();
-                ambientSound.fade(0, 0.6, 1000);
-                musicPlaying = true;
-                document.getElementById('music-icon').textContent = '♫';
-                document.getElementById('player-status').textContent = 'Playing';
+                _resumeCtx().then(() => {
+                    ambientSound.play();
+                    ambientSound.fade(0, videoSectionVisible ? 0 : _userVolume, 1000);
+                    musicPlaying = true;
+                    document.getElementById('music-icon').textContent = '♫';
+                    document.getElementById('player-status').textContent = 'Playing';
+                });
             }
         }
-        function setVolume(v) { if (ambientSound) ambientSound.volume(v) }
+        function setVolume(v) {
+            _userVolume = v;
+            if (ambientSound && !videoSectionVisible) ambientSound.volume(v);
+        }
 
         // ═══ ENTER EXPERIENCE ═══
         function enterExperience(withMusic) {
-            if (withMusic && ambientSound) { ambientSound.play(); ambientSound.fade(0, 0.6, 2000); musicPlaying = true }
+            if (withMusic && ambientSound) {
+                _resumeCtx().then(() => {
+                    ambientSound.play();
+                    ambientSound.fade(0, _userVolume, 2000);
+                    musicPlaying = true;
+                });
+            }
             requestFullscreenSmart();
             gsap.to('#entry-gate', { opacity: 0, duration: 1.5, ease: 'power2.inOut', onComplete: () => { document.getElementById('entry-gate').style.display = 'none' } });
             document.getElementById('music-player').style.display = 'flex';
@@ -1551,13 +1578,15 @@ ${lineEls}
                 ScrollTrigger.create({ trigger: scene, start: 'top center', end: 'bottom center', onEnter: () => { allDots.forEach(d => d.classList.remove('active')); if (allDots[i]) allDots[i].classList.add('active') }, onEnterBack: () => { allDots.forEach(d => d.classList.remove('active')); if (allDots[i]) allDots[i].classList.add('active') } });
             });
 
-            // Fade music when video visible
+            // Fade music when video visible — single source of truth for BGM volume
             document.querySelectorAll('.scene--video').forEach(vs => {
                 const obs = new IntersectionObserver(entries => {
                     entries.forEach(e => {
                         if (e.isIntersecting) {
+                            videoSectionVisible = true;
                             fadeMusicOut();
                         } else {
+                            videoSectionVisible = false;
                             fadeMusicIn();
                             // Pause video if scrolled away
                             const iframe = vs.querySelector('iframe');
@@ -1571,7 +1600,7 @@ ${lineEls}
                             if (video) video.pause();
                         }
                     })
-                }, { threshold: 0.2 });
+                }, { threshold: [0, 0.1] });
                 obs.observe(vs);
             });
 
