@@ -1082,9 +1082,9 @@
         let _userVolume = 0.6;
 
         window.onYouTubeIframeAPIReady = function () {
-                initYTPlayers();
-                monitorYTPlayers();
-            };
+            initYTPlayers();
+            monitorYTPlayers();
+        };
 
         function initYTPlayers() {
             const iframes = document.querySelectorAll('.scene--video iframe');
@@ -1112,25 +1112,25 @@
             });
         }
 
+        let _lastMonitorState = {};
         function monitorYTPlayers() {
             setInterval(() => {
-                Object.values(ytPlayers).forEach(player => {
+                Object.entries(ytPlayers).forEach(([id, player]) => {
                     try {
                         const state = player.getPlayerState();
+                        if (state === _lastMonitorState[id]) return; // no change
+                        _lastMonitorState[id] = state;
 
                         if (state === YT.PlayerState.PLAYING) {
                             videoIsPlaying = true;
                             fadeMusicOut();
-                        }
-
-                        if (state === YT.PlayerState.PAUSED || state === YT.PlayerState.ENDED) {
+                        } else if (state === YT.PlayerState.PAUSED || state === YT.PlayerState.ENDED) {
                             videoIsPlaying = false;
                             fadeMusicIn();
                         }
-
-                    } catch (e) {}
+                    } catch (e) { }
                 });
-            }, 700);
+            }, 500);
         }
 
         document.addEventListener('touchstart', () => {
@@ -1234,7 +1234,7 @@
         }
 
         function initAudio(src) {
-            ambientSound = new Howl({ src: [src], loop: true, volume: 0, html5: true });
+            ambientSound = new Howl({ src: [src], loop: true, volume: 0, preload: true });
         }
 
         function fadeMusicOut() {
@@ -1253,9 +1253,8 @@
             _fadeDebounce = setTimeout(() => {
                 _resumeCtx().then(() => {
                     if (videoSectionVisible && videoIsPlaying) return;
-                    // On mobile the sound may have been suspended — ensure it's playing
-                    // .play() is safe to call even if already playing with html5 mode
-                    try { if (!ambientSound.playing()) ambientSound.play(); } catch (e) { }
+                    // Always try to play — on mobile the sound may have been killed
+                    try { ambientSound.play(); } catch (e) { }
                     _rampVolume(_userVolume, 800);
                 });
             }, 100);
