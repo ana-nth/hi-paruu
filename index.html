@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#000008">
-    <title>Parvathy.</title>
+    <title>A Love Story</title>
     <link
         href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Cinzel:wght@300;400;600&family=Inter:wght@200;300;400&display=swap"
         rel="stylesheet">
@@ -1035,7 +1035,7 @@
     <div id="entry-gate">
         <canvas id="entry-canvas"></canvas>
         <div class="gate-content">
-            <h1 class="gate-title">. &amp; I</h1>
+            <h1 class="gate-title">You &amp; I</h1>
             <p class="gate-subtitle">Written in stardust. Meant to find each other.</p>
             <button id="enter-btn" onclick="enterExperience(true)">
                 <span class="btn-icon">♪</span>
@@ -1133,9 +1133,20 @@
             }, 500);
         }
 
+        // iOS audio rescue — touchstart IS a user gesture, so .play() works here
+        let _needsReplay = false;
         document.addEventListener('touchstart', () => {
             if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') {
                 Howler.ctx.resume();
+            }
+            // If audio was killed by iOS (e.g. YouTube took audio session), re-play it
+            if (ambientSound && musicPlaying && _needsReplay) {
+                try {
+                    const node = _getNode();
+                    if (node && node.paused) node.play().catch(() => { });
+                    if (!ambientSound.playing()) ambientSound.play();
+                    _needsReplay = false;
+                } catch (e) { }
             }
         }, { passive: true });
 
@@ -1204,20 +1215,27 @@
         // ═══ AUDIO ═══
         let _volRampTimer = null;
 
-        function _resumeCtx() {
-            if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') {
-                return Howler.ctx.resume();
-            }
-            return Promise.resolve();
+        // Get the raw HTML Audio element from Howler (for direct iOS control)
+        function _getNode() {
+            try { return ambientSound._sounds[0]._node; } catch (e) { return null; }
         }
 
-        // Manual volume ramp — much more reliable than Howler.fade() on mobile
+        // Set volume on BOTH Howler and the raw audio node (iOS needs direct node access)
+        function _setVol(v) {
+            v = Math.max(0, Math.min(1, v));
+            try { ambientSound.volume(v); } catch (e) { }
+            const node = _getNode();
+            if (node) { try { node.volume = v; } catch (e) { } }
+        }
+
+        // Manual volume ramp — sets volume directly on the HTML audio node
         function _rampVolume(target, durationMs) {
             if (!ambientSound) return;
             clearInterval(_volRampTimer);
             const steps = 20;
             const stepMs = durationMs / steps;
-            let current = ambientSound.volume();
+            let current = 0;
+            try { current = ambientSound.volume(); } catch (e) { }
             const delta = (target - current) / steps;
             let step = 0;
             _volRampTimer = setInterval(() => {
@@ -1225,39 +1243,40 @@
                 if (step >= steps) {
                     clearInterval(_volRampTimer);
                     _volRampTimer = null;
-                    try { ambientSound.volume(target); } catch (e) { }
+                    _setVol(target);
                     return;
                 }
                 current += delta;
-                try { ambientSound.volume(Math.max(0, Math.min(1, current))); } catch (e) { }
+                _setVol(current);
             }, stepMs);
         }
 
         function initAudio(src) {
-            ambientSound = new Howl({ src: [src], loop: true, volume: 0, preload: true });
+            ambientSound = new Howl({ src: [src], loop: true, volume: 0, html5: true });
         }
 
         function fadeMusicOut() {
             if (!ambientSound || !musicPlaying) return;
             clearTimeout(_fadeDebounce);
-            _fadeDebounce = setTimeout(() => {
-                _rampVolume(0, 500);
-            }, 50);
+            clearInterval(_volRampTimer);
+            _rampVolume(0, 400);
         }
 
         function fadeMusicIn() {
             if (!ambientSound || !musicPlaying) return;
-            // Don't restore if video section is visible AND video is actively playing
-            if (videoSectionVisible && videoIsPlaying) return;
+            if (videoSectionVisible) return;
             clearTimeout(_fadeDebounce);
-            _fadeDebounce = setTimeout(() => {
-                _resumeCtx().then(() => {
-                    if (videoSectionVisible && videoIsPlaying) return;
-                    // Always try to play — on mobile the sound may have been killed
-                    try { ambientSound.play(); } catch (e) { }
-                    _rampVolume(_userVolume, 800);
-                });
-            }, 100);
+            clearInterval(_volRampTimer);
+            // Try to ensure audio is playing
+            const node = _getNode();
+            if (node && node.paused) {
+                // Can't replay from non-gesture context on iOS — flag for touchstart
+                _needsReplay = true;
+                // Still attempt it (works on Android, might work on some iOS versions)
+                try { node.play().catch(() => { }); } catch (e) { }
+            }
+            try { if (!ambientSound.playing()) ambientSound.play(); } catch (e) { }
+            _rampVolume(_userVolume, 800);
         }
 
         function toggleMusic() {
@@ -1266,32 +1285,38 @@
                 clearInterval(_volRampTimer);
                 ambientSound.pause();
                 musicPlaying = false;
+                _needsReplay = false;
                 document.getElementById('music-icon').textContent = '♪';
                 document.getElementById('player-status').textContent = 'Paused';
             } else {
-                _resumeCtx().then(() => {
-                    ambientSound.play();
-                    _rampVolume(videoSectionVisible ? 0 : _userVolume, 1000);
-                    musicPlaying = true;
-                    document.getElementById('music-icon').textContent = '♫';
-                    document.getElementById('player-status').textContent = 'Playing';
-                });
+                // This is called from a click/tap — user gesture, so .play() works on iOS
+                try {
+                    if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') Howler.ctx.resume();
+                } catch (e) { }
+                ambientSound.play();
+                _rampVolume(videoSectionVisible ? 0 : _userVolume, 1000);
+                musicPlaying = true;
+                _needsReplay = false;
+                document.getElementById('music-icon').textContent = '♫';
+                document.getElementById('player-status').textContent = 'Playing';
             }
         }
 
         function setVolume(v) {
             _userVolume = v;
-            if (ambientSound && !(videoSectionVisible && videoIsPlaying)) ambientSound.volume(v);
+            if (ambientSound && !videoSectionVisible) _setVol(v);
         }
 
         // ═══ ENTER EXPERIENCE ═══
         function enterExperience(withMusic) {
             if (withMusic && ambientSound) {
-                _resumeCtx().then(() => {
-                    ambientSound.play();
-                    _rampVolume(_userVolume, 2000);
-                    musicPlaying = true;
-                });
+                // This is called from a button click — user gesture, so .play() works on iOS
+                try {
+                    if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') Howler.ctx.resume();
+                } catch (e) { }
+                ambientSound.play();
+                _rampVolume(_userVolume, 2000);
+                musicPlaying = true;
             }
             requestFullscreenSmart();
             gsap.to('#entry-gate', { opacity: 0, duration: 1.5, ease: 'power2.inOut', onComplete: () => { document.getElementById('entry-gate').style.display = 'none' } });
